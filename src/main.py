@@ -1,51 +1,102 @@
 import json
-from fastapi import FastAPI, WebSocket
+import os
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from groq import Groq
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# 1. Cargar la llave secreta
 load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Inicializar la aplicacion FastAPI
+if not GROQ_API_KEY:
+    raise ValueError("¡ERROR! No encontré la GROQ_API_KEY en el archivo .env")
+
+# 2. Configurar Clientes
 app = FastAPI()
+client = Groq(api_key=GROQ_API_KEY)
 
-@app.get("/")
-def health_check():
-    # Endpoint basico para verificar que el servidor responde
-    return {"status": "running", "service": "AI Incident Commander"}
+# 3. El Prompt del Sistema (La personalidad de tu IA)
+SYSTEM_PROMPT = """
+Eres el 'Comandante de Incidentes' de una empresa tecnológica.
+Tu rol es gestionar reportes de fallos en servidores.
+- Eres profesional, calmado y eficiente.
+- Tus respuestas deben ser BREVES (máximo 2 oraciones) para conversación telefónica.
+- Primero saluda y pregunta cuál es la emergencia.
+- Si reportan un error, pregunta por el código de error o la región afectada.
+- Al final, di que estás abriendo un ticket en Jira.
+"""
 
 @app.websocket("/llm-websocket/{call_id}")
 async def websocket_endpoint(websocket: WebSocket, call_id: str):
-    # Aceptar la conexion entrante de Retell AI
     await websocket.accept()
-    
+    print(f"Llamada conectada! ID: {call_id}")
     try:
-        # 1. Enviar mensaje de configuracion inicial
-        # Esto le dice a Retell que nosotros controlamos la respuesta
-        first_event = {
-            "response_type": "response",
-            "response_id": "initial_greeting",
-            "content": "Hola, sistema de incidentes en linea. Esperando instrucciones.",
-            "content_complete": True,
-            "end_call": False
-        }
-        await websocket.send_json(first_event)
-
-        # 2. Ciclo principal de la llamada
-        # Mantiene la conexion abierta escuchando eventos
         while True:
-            data = await websocket.receive_json()
-            
-            # Si es solo una actualizacion de estado, la ignoramos por ahora
-            if data.get("interaction_type") == "update_only":
-                continue
-            
-            # Aqui imprimimos en consola lo que Retell nos envia
-            # (Util para depurar y ver que esta pasando)
-            print(f"Evento recibido: {data}")
+            # Recibir mensaje de Retell
+            data = await websocket.receive_text()
+            event = json.loads(data)
 
+            # Verificar si Retell quiere una respuesta
+            if event["interaction_type"] == "response_required":
+                response_id = event["response_id"]
+                transcript = event["transcript"]
+                
+                # Obtener el último mensaje del usuario
+                user_text = transcript[-1]['content']
+                print(f"Usuario dijo: {user_text}")
+
+                # Preparar la respuesta vacía inicial
+                # (Esto le dice a Retell: "Espera, ya estoy pensando")
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "",
+                    "content_complete": False,
+                    "end_call": False
+                })
+
+                # --- CONECTAR CON LLAMA3.3 (CEREBRO) ---
+
+                stream = client.chat.completions.create(
+                    # ANTES DECÍA: model="llama3-8b-8192",
+                    # AHORA PON ESTE:
+                    model="llama-3.3-70b-versatile", 
+                    
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_text}
+                    ],
+                    stream=True,
+                    temperature=0.7,
+                    max_tokens=150
+                )
+
+                # Mandar cada palabra apenas llegue (Streaming)
+                generated_text = ""
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        word = chunk.choices[0].delta.content
+                        generated_text += word
+                        
+                        # Enviar pedacito a Retell
+                        await websocket.send_json({
+                            "response_id": response_id,
+                            "content": word,
+                            "content_complete": False,
+                            "end_call": False
+                        })
+                
+                print(f"IA respondió: {generated_text}")
+
+                # Avisar que terminamos de hablar
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "",
+                    "content_complete": True,
+                    "end_call": False
+                })
+
+    except WebSocketDisconnect:
+        print("Llamada finalizada por el usuario")
     except Exception as e:
-        # Captura cualquier error de desconexion o logica
-        print(f"Error en la conexion: {e}")
-    finally:
-        # Asegura que se reporte el cierre de la llamada
-        print("Llamada finalizada")
+        print(f"Error crítico: {e}")

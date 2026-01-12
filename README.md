@@ -118,4 +118,4 @@ ngrok http 8000
 ### Live System Logs
 *(Snapshot of real-time WebSocket communication and LLM Inference)*
 
-![System Logs](docs/img/respuestalA.png)
+![System Logs](docs/img/respuestaIA.png)

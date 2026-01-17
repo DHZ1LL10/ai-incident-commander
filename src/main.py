@@ -46,6 +46,11 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                 user_text = transcript[-1]['content']
                 print(f"Usuario dijo: {user_text}")
 
+                # --- NUEVO: Log simple en archivo ---
+                with open("call_logs.txt", "a", encoding="utf-8") as log_file:
+                    log_file.write(f"[{call_id}] User: {user_text}\n")
+                # ------------------------------------
+
                 # Preparar la respuesta vacía inicial
                 # (Esto le dice a Retell: "Espera, ya estoy pensando")
                 await websocket.send_json({
@@ -87,6 +92,10 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                         })
                 
                 print(f"IA respondió: {generated_text}")
+
+                with open("call_logs.txt", "a", encoding="utf-8") as log_file:
+                    log_file.write(f"[{call_id}] AI:   {generated_text}\n")
+                    log_file.write("-" * 50 + "\n") # Separador bonito
 
                 # Avisar que terminamos de hablar
                 await websocket.send_json({

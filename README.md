@@ -118,4 +118,7 @@ ngrok http 8000
 - [x] Local call logging (Text-based)
 - [ ] SQLite/Postgres Database implementation
 
-![System Logs](docs/img/respuestaIA.png)
+### Live System Logs
+*(Snapshot of AI Agent executing "Function Calling" to create a Jira ticket)*
+
+![Agent Action Logs](docs/img/respuestaLogica.png)

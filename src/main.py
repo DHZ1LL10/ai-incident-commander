@@ -1,35 +1,69 @@
 import json
 import os
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from groq import Groq
 from dotenv import load_dotenv
+from .database import create_db_and_tables, save_log
 
-# 1. Cargar la llave secreta
+# 1. Cargar variables de entorno
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not GROQ_API_KEY:
-    raise ValueError("ERROR: No encontre la GROQ_API_KEY en el archivo .env")
+    raise ValueError("ERROR: No se encontro GROQ_API_KEY en el archivo .env")
 
-# 2. Configurar Clientes
-app = FastAPI()
+# 2. Configuracion del ciclo de vida de la aplicacion
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Inicio: Crear tablas de base de datos
+    create_db_and_tables()
+    print("[SISTEMA] Base de datos inicializada correctamente.")
+    yield
+    # Cierre: (Aqui podrias cerrar conexiones si fuera necesario)
+
+# Inicializar FastAPI con el lifespan configurado
+app = FastAPI(lifespan=lifespan)
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- NUEVA FUNCION (HERRAMIENTA) ---
+# --- Definicion de Herramientas (Tools) ---
 def create_ticket(issue_type: str, description: str):
     """
     Simula la creacion de un ticket en el sistema (Jira/ServiceNow).
-    Devuelve un ID de ticket falso.
     """
     print(f"\n[SISTEMA] CREANDO TICKET: {issue_type} - {description}")
     
-    # Aqui iria la conexion real a Jira
+    # Simulacion de ID de ticket
     ticket_id = f"TICKET-{os.urandom(2).hex().upper()}"
     
     return json.dumps({"ticket_id": ticket_id, "status": "created"})
 
-# 3. El Prompt del Sistema
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_ticket",
+            "description": "Crea un ticket de soporte tecnico cuando el usuario reporta un incidente confirmado.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_type": {
+                        "type": "string",
+                        "description": "El tipo de problema (ej. 'Server Error', 'Database Down')",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Descripcion breve del problema reportado por el usuario",
+                    },
+                },
+                "required": ["issue_type", "description"],
+            },
+        },
+    }
+]
+
+# Prompt del Sistema
 SYSTEM_PROMPT = """
 Eres el 'Comandante de Incidentes' de una empresa tecnológica.
 Tu rol es gestionar reportes de fallos en servidores.
@@ -40,55 +74,30 @@ Tu rol es gestionar reportes de fallos en servidores.
 - Al final, di que estás abriendo un ticket en Jira.
 """
 
-# --- DEFINICION DE LA HERRAMIENTA PARA GROQ ---
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "create_ticket",
-            "description": "Crea un ticket de soporte técnico cuando el usuario reporta un incidente confirmado.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "issue_type": {
-                        "type": "string",
-                        "description": "El tipo de problema (ej. 'Server Error', 'Database Down')",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Descripción breve del problema reportado por el usuario",
-                    },
-                },
-                "required": ["issue_type", "description"],
-            },
-        },
-    }
-]
-
 @app.websocket("/llm-websocket/{call_id}")
 async def websocket_endpoint(websocket: WebSocket, call_id: str):
     await websocket.accept()
-    print(f"Llamada conectada! ID: {call_id}")
+    print(f"[CONEXION] Llamada conectada ID: {call_id}")
+    
     try:
         while True:
-            # Recibir mensaje de Retell
+            # Recibir datos de Retell AI
             data = await websocket.receive_text()
             event = json.loads(data)
 
-            # Verificar si Retell quiere una respuesta
+            # Verificar si se requiere respuesta
             if event["interaction_type"] == "response_required":
                 response_id = event["response_id"]
                 transcript = event["transcript"]
                 
-                # Obtener el ultimo mensaje del usuario
+                # Obtener ultimo mensaje del usuario
                 user_text = transcript[-1]['content']
-                print(f"Usuario dijo: {user_text}")
+                print(f"[USUARIO] {user_text}")
 
-                # Log simple en archivo
-                with open("call_logs.txt", "a", encoding="utf-8") as log_file:
-                    log_file.write(f"[{call_id}] User: {user_text}\n")
+                # Guardar en Base de Datos (Usuario)
+                save_log(call_id=call_id, role="user", content=user_text)
 
-                # Preparar la respuesta vacia inicial
+                # Enviar respuesta vacia inicial para mantener latencia baja
                 await websocket.send_json({
                     "response_id": response_id,
                     "content": "",
@@ -96,7 +105,7 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                     "end_call": False
                 })
 
-                # CONECTAR CON LLAMA3.3 (CON TOOLS)
+                # Llamada a Groq (Inferencia)
                 completion = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[
@@ -108,62 +117,55 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                     max_tokens=150
                 )
 
-                # Verificar si la IA quiere usar una herramienta
                 response_message = completion.choices[0].message
                 tool_calls = response_message.tool_calls
 
                 if tool_calls:
-                    # CASO A: La IA decidio EJECUTAR una funcion
-                    print("IA decidio usar una herramienta...")
+                    # Caso A: Uso de Herramienta
+                    print("[IA] Ejecutando herramienta...")
                     
                     for tool_call in tool_calls:
                         if tool_call.function.name == "create_ticket":
-                            # 1. Extraer argumentos
                             args = json.loads(tool_call.function.arguments)
                             
-                            # 2. Ejecutar funcion Python
+                            # Ejecucion de la funcion local
                             tool_result = create_ticket(
                                 issue_type=args.get("issue_type"), 
                                 description=args.get("description")
                             )
                             
-                            # 3. Crear respuesta para el usuario
                             ticket_data = json.loads(tool_result)
                             final_response = f"Entendido. He generado el reporte con ID {ticket_data['ticket_id']}. El equipo de soporte ya fue notificado."
                             
-                            # Guardar log de la herramienta
-                            with open("call_logs.txt", "a", encoding="utf-8") as log_file:
-                                log_file.write(f"[{call_id}] AI (Tool): {final_response}\n")
-                                log_file.write("-" * 50 + "\n")
+                            # Guardar en Base de Datos (Herramienta)
+                            save_log(call_id=call_id, role="ai_tool", content=final_response)
 
-                            # Enviar respuesta de voz
+                            # Enviar audio al usuario
                             await websocket.send_json({
                                 "response_id": response_id,
                                 "content": final_response,
                                 "content_complete": True,
                                 "end_call": False
                             })
-                            print(f"IA respondio (Tool): {final_response}")
+                            print(f"[IA - TOOL] {final_response}")
 
                 else:
-                    # CASO B: Respuesta normal (Conversacion)
+                    # Caso B: Respuesta Conversacional
                     generated_text = response_message.content
                     
-                    # Guardar log normal
-                    with open("call_logs.txt", "a", encoding="utf-8") as log_file:
-                        log_file.write(f"[{call_id}] AI: {generated_text}\n")
-                        log_file.write("-" * 50 + "\n")
+                    # Guardar en Base de Datos (IA)
+                    save_log(call_id=call_id, role="ai", content=generated_text)
 
-                    # Enviar respuesta de voz
+                    # Enviar audio al usuario
                     await websocket.send_json({
                         "response_id": response_id,
                         "content": generated_text,
                         "content_complete": True,
                         "end_call": False
                     })
-                    print(f"IA respondio: {generated_text}")
+                    print(f"[IA] {generated_text}")
 
     except WebSocketDisconnect:
-        print("Llamada finalizada por el usuario")
+        print("[CONEXION] Llamada finalizada por el usuario")
     except Exception as e:
-        print(f"Error critico: {e}")
+        print(f"[ERROR] Error critico: {e}")

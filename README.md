@@ -12,6 +12,8 @@ AI Incident Commander bridges the gap between traditional IT Ops dashboards and 
 - Low-Latency Inference: Powered by Groq LPU (Language Processing Unit) running Llama 3.3.
 - WebSocket Streaming: Bi-directional WebSocket server using FastAPI for async audio + token streaming.
 - Dynamic Routing: Handles unique call sessions through dynamically generated endpoints.
+- Agentic Capabilities: Implements Function Calling to autonomously execute server-side tasks (e.g., ticket creation) based on conversation context.
+- Persistence Layer: Local logging system to track conversation history and tool outputs for auditability.
 
 ## System Architecture
 The system follows an event-driven architecture optimized for high throughput and minimal latency.
@@ -19,26 +21,26 @@ The system follows an event-driven architecture optimized for high throughput an
 ```mermaid
 sequenceDiagram
     participant User as User (Telephony)
-    participant Retell as Retell AI (Voice Gateway)
-    participant Ngrok as Ngrok (Secure Tunnel)
+    participant Retell as Retell AI
     participant Python as FastAPI Backend
-    participant Groq as Groq Inference (Llama 3.3)
+    participant Groq as Groq Inference
 
-    Note over User, Retell: Phase 1: Voice Signal Processing
-    User->>Retell: Voice Input ("System failure detected")
-    Retell->>Retell: Transcribe Audio to Text (ASR)
-    Retell->>Ngrok: WebSocket Event (Transcript Update)
-    Ngrok->>Python: Route to Localhost:8000
+    Note over User, Retell: Phase 1: Voice Signal
+    User->>Retell: "System is down"
+    Retell->>Python: WebSocket (Transcript)
 
-    Note over Python, Groq: Phase 2: Cognitive Processing
-    Python->>Groq: Dispatch System Prompt + User Context
-    Groq-->>Python: Token Stream (Real-time generation)
-
-    loop Streaming Response
-        Python-->>Ngrok: Stream text chunk
-        Ngrok-->>Retell: Forward chunk to TTS Engine
-        Retell-->>User: Synthesize Audio & Playback
+    Note over Python, Groq: Phase 2: Reasoning & Action
+    Python->>Groq: Prompt + Available Tools
+    
+    alt Groq Decides to Use Tool
+        Groq-->>Python: Tool Call Request (create_ticket)
+        Python->>Python: Execute Function (Simulated Jira)
+        Python->>Groq: Return Tool Result (Ticket ID)
     end
+
+    Groq-->>Python: Final Natural Language Response
+    Python-->>Retell: Stream Response
+    Retell-->>User: Audio Playback
 ```
 
 ### Technology Stack
@@ -101,21 +103,19 @@ ngrok http 8000
 ``` 
 
 ## Roadmap
-### Phase 1: Core Infrastructure
-- FastAPI + Retell AI + Ngrok
+### Phase 1: Core Infrastructure [Completed]
+- [x] FastAPI + Retell AI + Ngrok
 
-### Phase 2: LLM Integration
-- Groq Llama 3.3 with streaming responses
+### Phase 2: LLM Integration [Completed]
+- [x] Groq Llama 3.3 with streaming responses
 
-### Phase 3: Tool Use
-- Jira ticket creation
-- Server restart / remediation commands
+### Phase 3: Tool Use & Agency [Current State]
+- [x] Context-aware function calling
+- [x] Simulated Jira ticket creation
+- [ ] Server restart / remediation commands (Next Step)
 
 ### Phase 4: Persistence & Analytics
-- Call logging
-- Incident analytics database
-
-### Live System Logs
-*(Snapshot of real-time WebSocket communication and LLM Inference)*
+- [x] Local call logging (Text-based)
+- [ ] SQLite/Postgres Database implementation
 
 ![System Logs](docs/img/respuestaIA.png)

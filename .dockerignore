@@ -1,0 +1,26 @@
+# Ignorar entorno virtual local (el contenedor crea el suyo propio)
+.venv/
+venv/
+
+# Ignorar git
+.git/
+.gitignore
+
+# Ignorar archivos temporales y caché
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignorar logs y bases de datos locales (empezamos limpios)
+*.log
+call_logs.txt
+*.db
+*.sqlite3
+
+# Ignorar documentación pesada
+docs/
+
+# ¡MUY IMPORTANTE! Nunca copiar el archivo de claves al contenedor
+# Las claves se pasan como variables de entorno al ejecutar
+.env
